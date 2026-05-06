@@ -3,16 +3,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef } from 'react';
 import { 
   Upload, 
   FileText, 
   Search, 
   Activity, 
   Layers, 
-  Download, 
   RefreshCcw,
-  History,
   Info,
   ChevronRight,
   Sparkles,
@@ -21,27 +19,20 @@ import {
   ChevronsRight
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import * as pdfjsLib from 'pdfjs-dist';
-import { GoogleGenAI } from '@google/genai';
+import { recognizeHanNomImage } from './api/gemini.js';
 
-// Set up PDF.js worker
-pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
+let pdfJsModulePromise: Promise<typeof import('pdfjs-dist')> | null = null;
 
-declare global {
-  interface ImportMetaEnv {
-    readonly VITE_GEMINI_API_KEY: string;
+async function loadPdfJs() {
+  if (!pdfJsModulePromise) {
+    pdfJsModulePromise = import('pdfjs-dist').then((pdfjsLib) => {
+      pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
+      return pdfjsLib;
+    });
   }
 
-  interface ImportMeta {
-    readonly env: ImportMetaEnv;
-  }
+  return pdfJsModulePromise;
 }
-
-// Initialization of Gemini (Client-side as per guidelines)
-const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_GEMINI_API_KEY || '' });
-
-// Constants for UI
-const ACCENT_RED = "#b22222";
 
 interface RecognitionResult {
   verticalText: string; // Used for paired Hán Nôm lines
@@ -116,7 +107,6 @@ export default function App() {
   const [currentPage, setCurrentPage] = useState(1);
   const [numPages, setNumPages] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
 
   const t = TRANSLATIONS[lang] as any;
 
@@ -153,6 +143,7 @@ export default function App() {
       if (file.type === 'application/pdf') {
         try {
           const arrayBuffer = await file.arrayBuffer();
+          const pdfjsLib = await loadPdfJs();
           const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
           const pdf = await loadingTask.promise;
           setPdfProxy(pdf);
@@ -190,69 +181,9 @@ export default function App() {
     setError(null);
 
     try {
-      const base64Data = image.split(',')[1];
-      
-      const prompt = `
-        You are a highly specialized Hán Nôm OCR engine used for Vietnamese cultural research.
-        Analyze the provided image of a Hán Nôm document.
-        The text is written vertically (top-to-bottom) and lines are arranged from right-to-left.
-        
-        Tasks:
-        1. Perform OCR to extract Hán Nôm characters exactly as they appear.
-        2. Format the Hán Nôm characters into logical horizontal lines. Use a SINGLE NEWLINE (\n) to separate lines.
-        3. Provide the Sino-Vietnamese readings (Âm Hán Việt) for each line. Ensure the number of lines in sinoVietnamese MATCHES exactly the number of lines in verticalText. Do not use [N] markers in the raw string for sinoVietnamese, just provide the text per line.
-        4. Provide a full translation into modern Vietnamese as a natural paragraph.
-        
-        Output only a JSON object with the following keys:
-        - verticalText: string (Original Hán Nôm text, one line per array element/line)
-        - sinoVietnamese: string (Sino-Vietnamese readings, one line per array element/line matching verticalText)
-        - modernVietnamese: string (Full translation into modern Vietnamese)
-        - confidence: number (0 to 1)
-        - tokens: array of objects { char: string, confidence: number }
-      `;
-
-      const res = await fetch(
-  `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${import.meta.env.VITE_GEMINI_API_KEY}`,
-  {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      contents: [
-        {
-          role: "user",
-          parts: [
-            { text: prompt },
-            {
-              inline_data: {
-                mime_type: "image/jpeg",
-                data: base64Data,
-              },
-            },
-          ],
-        },
-      ],
-    }),
-  }
-);
-
-const json = await res.json();
-
-// Lấy text từ response
-const text =
-  json?.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
-      // Find the first '{' and the last '}' to extract valid JSON
-      const firstBrace = text.indexOf('{');
-      const lastBrace = text.lastIndexOf('}');
-      
-      let data;
-      if (firstBrace !== -1 && lastBrace !== -1) {
-        const jsonContent = text.substring(firstBrace, lastBrace + 1);
-        data = JSON.parse(jsonContent);
-      } else {
-        data = JSON.parse(text);
-      }
+      const [dataUrlHeader, base64Data] = image.split(',');
+      const mimeType = dataUrlHeader.match(/^data:(.*);base64$/)?.[1] || 'image/jpeg';
+      const data = await recognizeHanNomImage({ imageBase64: base64Data, mimeType });
       setResult(data as RecognitionResult);
     } catch (err) {
       console.error(err);
@@ -375,7 +306,6 @@ const text =
                 
                 <div className="relative w-full h-full overflow-hidden rounded shadow-inner bg-[#e0dfdb] flex items-center justify-center">
                   <img src={image} alt="Source" className="object-contain w-full h-full p-2" />
-                  <canvas ref={canvasRef} className="hidden" />
                   <AnimatePresence>
                     {isProcessing && (
                       <motion.div 
