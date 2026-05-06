@@ -1,0 +1,6 @@
+{
+  "name": "Hán Nôm OCR & Translation System",
+  "description": "Hệ thống nhận diện (OCR) và dịch thuật văn bản Hán Nôm cổ từ hình ảnh và tài liệu PDF, trình bày theo phong cách truyền thống.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
