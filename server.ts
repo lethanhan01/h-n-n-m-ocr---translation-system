@@ -8,7 +8,7 @@ import net from "net";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const GEMINI_API_VERSION = process.env.GEMINI_API_VERSION || "v1beta";
-const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3-flash";
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.0-flash-lite";
 const OCR_PROMPT = `
   You are a highly specialized Hán Nôm OCR engine used for Vietnamese cultural research.
   Analyze the provided image of a Hán Nôm document.
@@ -62,6 +62,57 @@ async function startServer() {
     res.json({ status: "ok", message: "Hán Nôm OCR Server is active" });
   });
 
+  app.get("/api/gemini/models", async (req, res) => {
+    const apiKey = getGeminiApiKey();
+
+    if (!apiKey) {
+      res.status(500).json({ error: "Gemini API key is not configured." });
+      return;
+    }
+
+    try {
+      const modelsResponse = await fetch(
+        `https://generativelanguage.googleapis.com/${GEMINI_API_VERSION}/models?key=${encodeURIComponent(apiKey)}`,
+      );
+
+      const modelsPayload = await modelsResponse.clone().json().catch(() => null);
+      const modelsText = modelsPayload
+        ? ""
+        : await modelsResponse.text().catch(() => "");
+
+      if (!modelsResponse.ok) {
+        console.error("Gemini ListModels failed:", {
+          status: modelsResponse.status,
+          statusText: modelsResponse.statusText,
+          apiVersion: GEMINI_API_VERSION,
+          payload: modelsPayload,
+          body: modelsText.slice(0, 1000),
+        });
+        res.status(modelsResponse.status).json({
+          error:
+            modelsPayload?.error?.message ||
+            modelsText ||
+            "Unable to list Gemini models.",
+        });
+        return;
+      }
+
+      const models = (modelsPayload?.models ?? []).map((model: any) => ({
+        name: model?.name,
+        displayName: model?.displayName,
+        description: model?.description,
+        supportedGenerationMethods: model?.supportedGenerationMethods,
+        inputTokenLimit: model?.inputTokenLimit,
+        outputTokenLimit: model?.outputTokenLimit,
+      }));
+
+      res.json({ models });
+    } catch (error) {
+      console.error("Gemini ListModels failed:", error);
+      res.status(502).json({ error: "Unable to reach Gemini ListModels." });
+    }
+  });
+
   app.post("/api/gemini/ocr", async (req, res) => {
     const { imageBase64, mimeType = "image/jpeg" } = req.body ?? {};
     const apiKey = getGeminiApiKey();
@@ -103,12 +154,25 @@ async function startServer() {
         },
       );
 
-      const geminiPayload = await geminiResponse.json().catch(() => ({}));
+      const geminiPayload = await geminiResponse.clone().json().catch(() => null);
+      const geminiText = geminiPayload
+        ? ""
+        : await geminiResponse.text().catch(() => "");
 
       if (!geminiResponse.ok) {
-        console.error("Gemini API request failed:", geminiPayload);
+        console.error("Gemini API request failed:", {
+          status: geminiResponse.status,
+          statusText: geminiResponse.statusText,
+          apiVersion: GEMINI_API_VERSION,
+          model: GEMINI_MODEL,
+          payload: geminiPayload,
+          body: geminiText.slice(0, 1000),
+        });
         res.status(geminiResponse.status).json({
-          error: geminiPayload?.error?.message || "Gemini API request failed.",
+          error:
+            geminiPayload?.error?.message ||
+            geminiText ||
+            "Gemini API request failed.",
         });
         return;
       }
